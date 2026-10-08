@@ -1,6 +1,6 @@
 import {
-  MODULE_ID, QUALITY_FACTORS, SETTLE_DELAY, PATCH_MARGIN,
-  ZOOM_IN_THRESHOLD, ZOOM_OUT_THRESHOLD, HARD_TEXTURE_CAP
+  MODULE_ID, QUALITY_FACTORS, SETTLE_DELAY, TILE_SIZE, VIEW_MARGIN_TILES,
+  LEVEL_BIAS, FRAME_BUDGET, HARD_TEXTURE_CAP
 } from "./constants.mjs";
 import { isSvgSource, loadSvg, clearSvgCache, createCanvas, drawRegion } from "./svg-rasterizer.mjs";
 
@@ -10,31 +10,32 @@ import { isSvgSource, loadSvg, clearSvgCache, createCanvas, drawRegion } from ".
  *
  * @typedef {object} Patch
  * @property {PIXI.DisplayObject} mesh   Objet ajouté au canvas, posé par-dessus la cible
- * @property {PIXI.Texture} texture       Rendu actuellement affiché
- * @property {boolean} shown              Le patch est utile à ce niveau de zoom
- * @property {Region|null} region         Zone actuellement affichée
- * @property {number} width               Taille en px du dernier rendu
+ * @property {PIXI.Texture} texture       Texture affichée (celle de la vue)
+ * @property {Region} region              Zone de l'image couverte
+ * @property {number} width               Taille en px de la texture
  * @property {number} height
- * @property {number} fullWidth           Largeur équivalente de l'image entière à cette résolution
+ * @property {boolean} shown              Le patch est utile à ce niveau de zoom
  *
  * @typedef {object} TargetState
  * @property {string} src
  * @property {PIXI.Texture} original      Texture de Foundry (jamais détruite par Vellum)
  * @property {{texture:PIXI.Texture, width:number, height:number}|null} base
  * @property {Patch|null} patch
+ * @property {object|null} view            Vue courante : niveau, tuiles couvertes, texture assemblée
+ * @property {Map<string, {rt:PIXI.RenderTexture, used:number}>} tiles  Cache des tuiles
  * @property {boolean} baseTried          Le fond de base a déjà été tenté
  * @property {number} token               Compteur pour abandonner les rendus obsolètes
  */
 
 /**
- * Vellum 0.2 — rendu en deux couches :
+ * Vellum — rendu en deux couches :
  *
  * 1. **Le fond de base** : l'image entière, rendue une seule fois à une
  *    résolution moyenne (4096 px par défaut), à la place de la texture native
  *    de Foundry. Il sert de filet de sécurité pendant les déplacements.
- * 2. **Le patch** : uniquement la zone visible (plus une marge), rendue à la
- *    résolution exacte de l'écran, et posée par-dessus. Il est redessiné après
- *    un zoom ou quand on sort de la marge.
+ * 2. **Le patch** : la zone visible, assemblée à partir de tuiles de 512 px
+ *    rendues à des niveaux de zoom fixes (×2, ×4…) et gardées en cache sur le
+ *    GPU. Seules les tuiles manquantes sont dessinées, une par image.
  *
  * Le patch est un objet du même type que la cible, inséré juste au-dessus d'elle
  * dans le même conteneur : il reçoit donc l'éclairage, le brouillard et la vision.
@@ -44,6 +45,8 @@ export class VellumRenderer {
   #states = new Map();
   /** Fonds de base partagés, par SVG et par taille. */
   #bases = new Map();
+  #scratchCanvas = null;
+  #blit = null;
   #timer = null;
   #firstRequest = null;
   #running = false;
@@ -138,7 +141,7 @@ export class VellumRenderer {
         state = null;
       }
       if (!state) {
-        state = { src, original: target.texture, base: null, patch: null, baseTried: false, token: 0 };
+        state = { src, original: target.texture, base: null, patch: null, view: null, tiles: new Map(), baseTried: false, token: 0 };
         this.#states.set(target, state);
       }
 
@@ -276,16 +279,26 @@ export class VellumRenderer {
   }
 
   /* -------------------------------------------- */
-  /*  Couche 2 : patch de la zone visible         */
+  /*  Couche 2 : zone visible, rendue par tuiles  */
   /* -------------------------------------------- */
+
+  /*
+   * La carte est découpée en tuiles de TILE_SIZE px, à des niveaux de zoom fixes :
+   * au niveau L, l'image entière fait (largeur du fond de base × 2^L) px. Les tuiles
+   * sont gardées en cache sur la carte graphique. Les tuiles de la vue sont
+   * assemblées sur le GPU dans une seule texture (la « vue »), affichée par le
+   * patch. Seules les tuiles manquantes sont dessinées, une par image, en
+   * commençant par le centre de l'écran.
+   */
 
   async #updatePatch(target, state, source) {
     const full = this.#neededFullSize(target, state);
     if (!full) return;
 
-    // La couche de base suffit à ce niveau de zoom : pas besoin de patch.
+    // La couche de base suffit à ce niveau de zoom.
     const baseWidth = state.base?.width ?? this.#nativeSize(state).width;
-    if (full.width <= baseWidth * 1.05) {
+    const ratio = full.width / baseWidth;
+    if (ratio <= 2 ** LEVEL_BIAS) {
       this.#showPatch(state, false);
       return;
     }
@@ -296,71 +309,235 @@ export class VellumRenderer {
       return;
     }
 
-    // Le patch actuel couvre encore la vue à une résolution convenable ? Rien à faire.
-    const patch = state.patch;
-    if (patch?.region && !patch.mesh.destroyed && patch.width > 0) {
-      const ratio = full.width / patch.fullWidth;
-      const fresh = ratio < ZOOM_IN_THRESHOLD && ratio > ZOOM_OUT_THRESHOLD;
-      if (fresh && this.#contains(patch.region, visible)) {
-        this.#showPatch(state, true);
-        return;
-      }
+    // Niveau de zoom : le plus petit qui atteint (presque) la résolution voulue.
+    let level = Math.max(1, Math.ceil(Math.log2(ratio) - LEVEL_BIAS));
+    let layout;
+    while (level >= 1) {
+      layout = this.#viewLayout(state, baseWidth, level, visible);
+      if (layout.fits) break;
+      level--; // budget ou GPU dépassé : on accepte un peu moins de finesse
     }
-
-    const region = this.#expand(visible, PATCH_MARGIN);
-    let width = region.du * full.width;
-    let height = region.dv * full.height;
-
-    // Budget mémoire et plafond GPU.
-    const budget = (this.#setting("maxMegapixels") ?? 32) * 1_000_000;
-    let k = Math.min(1, Math.sqrt(budget / (width * height)));
-    k = Math.min(k, this.#gpuMaxSide() / Math.max(width, height));
-    width = Math.max(1, Math.round(width * k));
-    height = Math.max(1, Math.round(height * k));
-    const fullWidth = full.width * k;
-
-    // Le budget empêche de faire mieux que le fond de base : inutile de dessiner.
-    if (fullWidth <= baseWidth * 1.05) {
+    if (level < 1) {
       this.#showPatch(state, false);
       return;
     }
 
-    await this.#renderPatch(target, state, source, region, width, height, fullWidth);
-  }
-
-  async #renderPatch(target, state, source, region, width, height, fullWidth) {
-    const token = ++state.token;
-    const t0 = performance.now();
-
-    // On dessine dans un canvas à part : le patch affiché reste intact pendant le rendu.
-    const { canvas: el, ctx } = createCanvas(width, height);
-    const done = await drawRegion(source, ctx, region, width, height,
-      () => token !== state.token || target.destroyed);
-    if (!done || this.#states.get(target) !== state) {
-      el.width = el.height = 0;
+    // Même vue qu'avant : rien à recomposer, on finit juste les tuiles manquantes.
+    const view = state.view;
+    if (view && view.key === layout.key && !view.rt.destroyed) {
+      this.#showPatch(state, true);
+      if (view.queue.length && !view.pumping) this.#pump(target, state, source, view);
       return;
     }
 
-    const texture = PIXI.Texture.from(el, this.#textureOptions());
+    this.#composeView(target, state, layout);
+    this.#pump(target, state, source, state.view);
+  }
+
+  /**
+   * Calcule les tuiles nécessaires pour couvrir la zone visible (plus une tuile
+   * de marge de chaque côté) à un niveau donné.
+   */
+  #viewLayout(state, baseWidth, level, visible) {
+    const native = this.#nativeSize(state);
+    const levelW = Math.round(baseWidth * 2 ** level);
+    const levelH = Math.max(1, Math.round(levelW * native.height / native.width));
+    const T = TILE_SIZE;
+    const cols = Math.ceil(levelW / T), rows = Math.ceil(levelH / T);
+    const i0 = Math.max(0, Math.floor(visible.u0 * levelW / T) - VIEW_MARGIN_TILES);
+    const j0 = Math.max(0, Math.floor(visible.v0 * levelH / T) - VIEW_MARGIN_TILES);
+    const i1 = Math.min(cols, Math.ceil((visible.u0 + visible.du) * levelW / T) + VIEW_MARGIN_TILES);
+    const j1 = Math.min(rows, Math.ceil((visible.v0 + visible.dv) * levelH / T) + VIEW_MARGIN_TILES);
+    const width = Math.min(i1 * T, levelW) - i0 * T;
+    const height = Math.min(j1 * T, levelH) - j0 * T;
+
+    const budget = (this.#setting("maxMegapixels") ?? 32) * 1_000_000;
+    const maxSide = this.#gpuMaxSide();
+    const fits = width * height <= budget && width <= maxSide && height <= maxSide;
+
+    // Centre de l'écran, en coordonnées de tuiles : les tuiles proches passent en premier.
+    const cx = (visible.u0 + visible.du / 2) * levelW / T;
+    const cy = (visible.v0 + visible.dv / 2) * levelH / T;
+
+    return {
+      level, levelW, levelH, i0, j0, i1, j1, width, height, fits, cx, cy,
+      key: `${level}:${i0}:${j0}:${i1}:${j1}`,
+      region: { u0: i0 * T / levelW, v0: j0 * T / levelH, du: width / levelW, dv: height / levelH }
+    };
+  }
+
+  /**
+   * Crée la texture de la vue et y assemble ce qui est déjà disponible : l'ancienne
+   * vue mise à l'échelle (en attendant mieux), puis les tuiles en cache.
+   */
+  #composeView(target, state, layout) {
+    const renderer = canvas.app.renderer;
+    const rt = PIXI.RenderTexture.create({ width: layout.width, height: layout.height, resolution: 1 });
+    if (PIXI.MIPMAP_MODES) rt.baseTexture.mipmap = PIXI.MIPMAP_MODES.OFF;
+
+    const old = state.view;
+    const sprite = this.#blitSprite();
+    let first = true;
+    const blit = (texture, x, y, sx = 1, sy = 1) => {
+      sprite.texture = texture;
+      sprite.position.set(x, y);
+      sprite.scale.set(sx, sy);
+      renderer.render(sprite, { renderTexture: rt, clear: first });
+      first = false;
+    };
+
+    // Ancienne vue en guise d'aperçu (même si elle est d'un autre niveau de zoom).
+    if (old && !old.rt.destroyed) {
+      const { u0, v0, du, dv } = old.region;
+      blit(old.rt,
+        u0 * layout.levelW - layout.i0 * TILE_SIZE,
+        v0 * layout.levelH - layout.j0 * TILE_SIZE,
+        du * layout.levelW / old.width,
+        dv * layout.levelH / old.height);
+    }
+    if (first) renderer.render(new PIXI.Container(), { renderTexture: rt, clear: true });
+
+    // Tuiles déjà en cache, puis file d'attente des manquantes, du centre vers les bords.
+    const queue = [];
+    const now = performance.now();
+    for (let j = layout.j0; j < layout.j1; j++) {
+      for (let i = layout.i0; i < layout.i1; i++) {
+        const tile = state.tiles.get(`${layout.level}:${i}:${j}`);
+        if (tile && !tile.rt.destroyed) {
+          tile.used = now;
+          blit(tile.rt, (i - layout.i0) * TILE_SIZE, (j - layout.j0) * TILE_SIZE);
+        } else {
+          queue.push({ i, j, d: Math.hypot(i + 0.5 - layout.cx, j + 0.5 - layout.cy) });
+        }
+      }
+    }
+    queue.sort((a, b) => a.d - b.d);
+
+    state.view = { ...layout, rt, queue, pumping: false, rendered: 0, t0: performance.now() };
+    this.#attachView(target, state);
+    if (old) old.rt.destroy(true);
+  }
+
+  /** Affiche la vue courante dans le patch (créé au besoin). */
+  #attachView(target, state) {
+    const view = state.view;
     let patch = state.patch;
     if (!patch || patch.mesh.destroyed) {
-      const mesh = this.#createPatchMesh(target, texture);
-      if (!mesh) {
-        this.#destroyTexture(texture);
-        return;
-      }
-      patch = state.patch = { mesh, texture: null, shown: false };
+      const mesh = this.#createPatchMesh(target, view.rt);
+      if (!mesh) return;
+      patch = state.patch = { mesh, shown: false };
     } else {
-      patch.mesh.texture = texture;
+      patch.mesh.texture = view.rt;
     }
-
-    const previous = patch.texture;
-    Object.assign(patch, { texture, region, width, height, fullWidth });
-    this.#destroyTexture(previous);
-
+    Object.assign(patch, { texture: view.rt, region: view.region, width: view.width, height: view.height });
     this.#showPatch(state, true);
     this.#syncPatch(target, state);
-    this.#log(`Zone ${width}×${height} en ${Math.round(performance.now() - t0)} ms`, state.src);
+  }
+
+  /**
+   * Dessine les tuiles manquantes de la vue, une par une, en rendant la main au
+   * navigateur dès que le budget de l'image est consommé.
+   */
+  async #pump(target, state, source, view) {
+    view.pumping = true;
+    const renderer = canvas.app.renderer;
+    const T = TILE_SIZE;
+    let sliceStart = performance.now();
+    try {
+      while (view.queue.length) {
+        if (this.#states.get(target) !== state || state.view !== view || target.destroyed || view.rt.destroyed) return;
+
+        const { i, j } = view.queue.shift();
+        const key = `${view.level}:${i}:${j}`;
+        let tile = state.tiles.get(key);
+        if (!tile || tile.rt.destroyed) {
+          tile = this.#renderTile(source, view, i, j);
+          state.tiles.set(key, tile);
+          view.rendered++;
+        }
+        tile.used = performance.now();
+
+        const sprite = this.#blitSprite();
+        sprite.texture = tile.rt;
+        sprite.position.set((i - view.i0) * T, (j - view.j0) * T);
+        sprite.scale.set(1, 1);
+        renderer.render(sprite, { renderTexture: view.rt, clear: false });
+
+        if (performance.now() - sliceStart > FRAME_BUDGET) {
+          await new Promise(resolve => requestAnimationFrame(() => resolve()));
+          sliceStart = performance.now();
+        }
+      }
+      if (view.rendered) {
+        this.#log(`Zone ${view.width}×${view.height} (niveau ×${2 ** view.level}) : ${view.rendered} tuile(s) en ${Math.round(performance.now() - view.t0)} ms`, state.src);
+      }
+      this.#evictTiles(state);
+    } finally {
+      view.pumping = false;
+    }
+  }
+
+  /** Dessine une tuile du SVG et la range dans une texture GPU. */
+  #renderTile(source, view, i, j) {
+    const T = TILE_SIZE;
+    const w = Math.min(T, view.levelW - i * T);
+    const h = Math.min(T, view.levelH - j * T);
+    const scratch = this.#scratch();
+    const { ctx } = scratch;
+    ctx.clearRect(0, 0, T, T);
+    const kx = source.width / view.levelW, ky = source.height / view.levelH;
+    ctx.drawImage(source.img, i * T * kx, j * T * ky, w * kx, h * ky, 0, 0, w, h);
+    scratch.texture.baseTexture.update();
+
+    const rt = PIXI.RenderTexture.create({ width: w, height: h, resolution: 1 });
+    if (PIXI.MIPMAP_MODES) rt.baseTexture.mipmap = PIXI.MIPMAP_MODES.OFF;
+    const sprite = this.#blitSprite();
+    sprite.texture = new PIXI.Texture(scratch.texture.baseTexture, new PIXI.Rectangle(0, 0, w, h));
+    sprite.position.set(0, 0);
+    sprite.scale.set(1, 1);
+    canvas.app.renderer.render(sprite, { renderTexture: rt, clear: true });
+    sprite.texture.destroy(false);
+    return { rt, used: performance.now() };
+  }
+
+  /** Libère les tuiles les moins récemment utilisées au-delà du budget mémoire. */
+  #evictTiles(state) {
+    const budget = (this.#setting("maxMegapixels") ?? 32) * 1_000_000;
+    const maxTiles = Math.max(32, Math.floor(budget / (TILE_SIZE * TILE_SIZE)));
+    if (state.tiles.size <= maxTiles) return;
+    const entries = Array.from(state.tiles.entries()).sort((a, b) => a[1].used - b[1].used);
+    for (const [key, tile] of entries.slice(0, state.tiles.size - maxTiles)) {
+      tile.rt.destroy(true);
+      state.tiles.delete(key);
+    }
+  }
+
+  /** Canvas de travail réutilisé pour dessiner les tuiles. */
+  #scratch() {
+    if (!this.#scratchCanvas || this.#scratchCanvas.texture.baseTexture.destroyed) {
+      const { canvas: el, ctx } = createCanvas(TILE_SIZE, TILE_SIZE);
+      this.#scratchCanvas = { canvas: el, ctx, texture: PIXI.Texture.from(el, this.#textureOptions()) };
+    }
+    return this.#scratchCanvas;
+  }
+
+  /** Sprite réutilisé pour les copies entre textures sur le GPU. */
+  #blitSprite() {
+    if (!this.#blit || this.#blit.destroyed) this.#blit = new PIXI.Sprite();
+    return this.#blit;
+  }
+
+  /** Libère la vue et toutes les tuiles d'un objet. */
+  #releaseTiles(state) {
+    if (state.view) {
+      state.view.queue.length = 0;
+      if (!state.view.rt.destroyed) state.view.rt.destroy(true);
+      state.view = null;
+    }
+    for (const tile of state.tiles?.values() ?? []) {
+      if (!tile.rt.destroyed) tile.rt.destroy(true);
+    }
+    state.tiles?.clear();
   }
 
   /**
@@ -494,21 +671,6 @@ export class VellumRenderer {
     return { u0, v0, du: u1 - u0, dv: v1 - v0 };
   }
 
-  /** Agrandit une zone d'une marge relative, sans sortir de l'image. */
-  #expand(r, margin) {
-    const mu = r.du * margin, mv = r.dv * margin;
-    const u0 = Math.max(0, r.u0 - mu), v0 = Math.max(0, r.v0 - mv);
-    const u1 = Math.min(1, r.u0 + r.du + mu), v1 = Math.min(1, r.v0 + r.dv + mv);
-    return { u0, v0, du: u1 - u0, dv: v1 - v0 };
-  }
-
-  /** Teste si la zone a contient entièrement la zone b. */
-  #contains(a, b) {
-    const eps = 1e-6;
-    return b.u0 >= a.u0 - eps && b.v0 >= a.v0 - eps
-      && b.u0 + b.du <= a.u0 + a.du + eps && b.v0 + b.dv <= a.v0 + a.dv + eps;
-  }
-
   #gpuMaxSide() {
     const gl = canvas.app?.renderer?.gl;
     const gpuMax = gl ? gl.getParameter(gl.MAX_TEXTURE_SIZE) : 8192;
@@ -549,9 +711,9 @@ export class VellumRenderer {
         mesh.parent?.removeChild(mesh);
         mesh.destroy({ children: true, texture: false });
       }
-      this.#destroyTexture(state.patch.texture);
       state.patch = null;
     }
+    this.#releaseTiles(state);
     if (state.base && restore && !target.destroyed && target.texture === state.base.texture && !state.original.destroyed) {
       this.#swapTexture(target, state.original);
     }
@@ -586,7 +748,10 @@ export class VellumRenderer {
         objet: target.constructor?.name,
         natif: `${native.width}×${native.height}`,
         base: s.base ? `${s.base.width}×${s.base.height}` : "—",
-        zone: p?.region && p.shown ? `${p.width}×${p.height} (${pct(p.region.du)}×${pct(p.region.dv)})` : "—",
+        zone: p?.region && p.shown && s.view
+          ? `${p.width}×${p.height} ×${2 ** s.view.level} (${pct(p.region.du)}×${pct(p.region.dv)})`
+          : "—",
+        tuiles: s.tiles.size ? `${s.tiles.size} en cache${s.view?.queue.length ? `, ${s.view.queue.length} en attente` : ""}` : "—",
         visible: target.worldVisible
       };
     });

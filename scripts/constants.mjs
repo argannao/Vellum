@@ -11,21 +11,24 @@ export const QUALITY_FACTORS = {
 /** Résolutions possibles du fond de base (côté le plus long, en px). */
 export const BASE_RESOLUTIONS = [2048, 4096, 8192];
 
-/** Délai (ms) après le dernier zoom/déplacement avant de redessiner la zone visible. */
-export const SETTLE_DELAY = 150;
+/** Délai (ms) après le dernier zoom/déplacement avant de mettre à jour la zone visible. */
+export const SETTLE_DELAY = 100;
 
 /**
- * Marge rendue autour de la zone visible, en fraction de sa taille.
- * Permet de se déplacer un peu sans déclencher de nouveau rendu.
+ * Taille des tuiles (px). 512 px : assez petit pour qu'une tuile se dessine et
+ * s'envoie au GPU en une image (~16 ms), assez grand pour limiter le surcoût fixe
+ * de chaque dessin.
  */
-export const PATCH_MARGIN = 0.25;
+export const TILE_SIZE = 512;
 
-/** On redessine la zone quand le zoom a changé au-delà de ces rapports. */
-export const ZOOM_IN_THRESHOLD = 1.15;
-export const ZOOM_OUT_THRESHOLD = 0.6;
+/** Tuiles de marge préparées autour de la zone visible, de chaque côté. */
+export const VIEW_MARGIN_TILES = 1;
 
-/** Taille des morceaux pour les rendus découpés (px). */
-export const TILE_SIZE = 1024;
+/**
+ * Tolérance (en puissance de 2) avant de passer au niveau de zoom supérieur :
+ * 0,25 accepte un agrandissement jusqu'à ×1,19 avant de redessiner plus fin.
+ */
+export const LEVEL_BIAS = 0.25;
 
 /** Temps maximum (ms) de dessin d'affilée avant de rendre la main au navigateur. */
 export const FRAME_BUDGET = 12;
