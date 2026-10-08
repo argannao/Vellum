@@ -1,0 +1,43 @@
+# Publie le module à chaque release GitHub.
+# Créez une release avec un tag du type "v0.1.0" : ce workflow met à jour
+# module.json (version + URLs) puis joint module.json et module.zip à la release.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Récupérer le code
+        uses: actions/checkout@v4
+
+      - name: Extraire la version du tag
+        id: version
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Mettre à jour module.json
+        run: |
+          jq \
+            --arg version "${{ steps.version.outputs.version }}" \
+            --arg manifest "https://github.com/${{ github.repository }}/releases/latest/download/module.json" \
+            --arg download "https://github.com/${{ github.repository }}/releases/download/${{ github.ref_name }}/module.zip" \
+            '.version = $version | .manifest = $manifest | .download = $download' \
+            module.json > module.tmp.json
+          mv module.tmp.json module.json
+          cat module.json
+
+      - name: Créer l'archive
+        run: zip -r module.zip module.json scripts lang README.md LICENSE CHANGELOG.md
+
+      - name: Joindre les fichiers à la release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            module.json
+            module.zip

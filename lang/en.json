@@ -1,0 +1,31 @@
+{
+  "VELLUM": {
+    "Settings": {
+      "Enabled": {
+        "Name": "Enable vector rendering",
+        "Hint": "Redraws SVG scene backgrounds and tiles at screen resolution on every zoom. When disabled, Foundry displays them as regular images."
+      },
+      "Quality": {
+        "Name": "Quality",
+        "Hint": "Render resolution multiplier relative to the screen. Above 1, output is sharper but uses more video memory.",
+        "Choices": {
+          "low": "Saver (×0.75)",
+          "normal": "Screen (×1)",
+          "high": "Fine (×1.5)",
+          "ultra": "Very fine (×2)"
+        }
+      },
+      "MaxMegapixels": {
+        "Name": "Memory budget per image (megapixels)",
+        "Hint": "Maximum size of a rendered image. 64 MP ≈ 256 MB of video memory. Lower this if your graphics card, or your players', is limited."
+      },
+      "Debug": {
+        "Name": "Debug mode",
+        "Hint": "Logs details of every SVG render to the console (F12)."
+      }
+    },
+    "Notifications": {
+      "LoadFailed": "Vellum: could not load SVG \"{src}\". It stays displayed at native resolution."
+    }
+  }
+}

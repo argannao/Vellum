@@ -1,0 +1,31 @@
+{
+  "VELLUM": {
+    "Settings": {
+      "Enabled": {
+        "Name": "Activer le rendu vectoriel",
+        "Hint": "Redessine les fonds de scène et tuiles SVG à la résolution de l'écran à chaque zoom. Désactivé, Foundry les affiche comme des images classiques."
+      },
+      "Quality": {
+        "Name": "Qualité",
+        "Hint": "Multiplicateur de la résolution de rendu par rapport à l'écran. Au-delà de 1, le rendu est plus fin mais consomme plus de mémoire vidéo.",
+        "Choices": {
+          "low": "Économe (×0,75)",
+          "normal": "Écran (×1)",
+          "high": "Fine (×1,5)",
+          "ultra": "Très fine (×2)"
+        }
+      },
+      "MaxMegapixels": {
+        "Name": "Budget mémoire par image (mégapixels)",
+        "Hint": "Taille maximale d'une image rendue. 64 Mpx ≈ 256 Mo de mémoire vidéo. Baissez cette valeur si votre carte graphique ou celle de vos joueurs est limitée."
+      },
+      "Debug": {
+        "Name": "Mode débogage",
+        "Hint": "Affiche dans la console (F12) le détail de chaque rendu SVG."
+      }
+    },
+    "Notifications": {
+      "LoadFailed": "Vellum : impossible de charger le SVG « {src} ». Il reste affiché en résolution native."
+    }
+  }
+}
