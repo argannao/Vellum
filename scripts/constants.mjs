@@ -8,17 +8,27 @@ export const QUALITY_FACTORS = {
   ultra: 2
 };
 
-/** Délai (ms) après le dernier zoom/déplacement avant de redessiner. */
-export const SETTLE_DELAY = 200;
+/** Résolutions possibles du fond de base (côté le plus long, en px). */
+export const BASE_RESOLUTIONS = [2048, 4096, 8192];
 
-/** On redessine en plus fin quand la cible dépasse la résolution actuelle de ce facteur. */
-export const UPSCALE_THRESHOLD = 1.2;
+/** Délai (ms) après le dernier zoom/déplacement avant de redessiner la zone visible. */
+export const SETTLE_DELAY = 150;
 
-/** On redessine en plus petit (pour libérer la mémoire) sous ce facteur. */
-export const DOWNSCALE_THRESHOLD = 0.5;
+/**
+ * Marge rendue autour de la zone visible, en fraction de sa taille.
+ * Permet de se déplacer un peu sans déclencher de nouveau rendu.
+ */
+export const PATCH_MARGIN = 0.25;
 
-/** Taille minimale (côté le plus long, en px) d'un rendu Vellum. */
-export const MIN_RENDER_SIZE = 512;
+/** On redessine la zone quand le zoom a changé au-delà de ces rapports. */
+export const ZOOM_IN_THRESHOLD = 1.15;
+export const ZOOM_OUT_THRESHOLD = 0.6;
+
+/** Taille des morceaux pour les rendus découpés (px). */
+export const TILE_SIZE = 1024;
+
+/** Temps maximum (ms) de dessin d'affilée avant de rendre la main au navigateur. */
+export const FRAME_BUDGET = 12;
 
 /** Plafond absolu de taille de texture, même si le GPU accepte plus. */
 export const HARD_TEXTURE_CAP = 16384;

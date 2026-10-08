@@ -15,9 +15,13 @@
           "ultra": "Very fine (×2)"
         }
       },
+      "BaseResolution": {
+        "Name": "Base layer resolution",
+        "Hint": "Size (longest side) of the full-map version, rendered once when the scene loads. It is shown when zoomed out and while panning. Higher = sharper overview, but longer loading."
+      },
       "MaxMegapixels": {
-        "Name": "Memory budget per image (megapixels)",
-        "Hint": "Maximum size of a rendered image. 64 MP ≈ 256 MB of video memory. Lower this if your graphics card, or your players', is limited."
+        "Name": "Visible area memory budget (megapixels)",
+        "Hint": "Maximum size of the high-resolution render of the displayed area. 32 MP ≈ 128 MB of video memory, enough for a 4K screen at \"Fine\" quality. Lower this on modest hardware."
       },
       "Debug": {
         "Name": "Debug mode",

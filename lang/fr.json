@@ -15,9 +15,13 @@
           "ultra": "Très fine (×2)"
         }
       },
+      "BaseResolution": {
+        "Name": "Résolution du fond de base",
+        "Hint": "Taille (côté le plus long) de la version complète de la carte, rendue une seule fois au chargement de la scène. Elle s'affiche quand vous êtes dézoomé et pendant les déplacements. Plus haut = plus net en vue d'ensemble, mais chargement plus long."
+      },
       "MaxMegapixels": {
-        "Name": "Budget mémoire par image (mégapixels)",
-        "Hint": "Taille maximale d'une image rendue. 64 Mpx ≈ 256 Mo de mémoire vidéo. Baissez cette valeur si votre carte graphique ou celle de vos joueurs est limitée."
+        "Name": "Budget mémoire de la zone visible (mégapixels)",
+        "Hint": "Taille maximale du rendu haute résolution de la zone affichée. 32 Mpx ≈ 128 Mo de mémoire vidéo, suffisant pour un écran 4K en qualité « Fine ». Baissez cette valeur sur les petites configurations."
       },
       "Debug": {
         "Name": "Mode débogage",

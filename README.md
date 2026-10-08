@@ -4,7 +4,7 @@
 
 Le vélin était la surface lisse et sans grain des manuscrits enluminés. Vellum apporte la même chose à vos cartes : plus de pixels qui apparaissent quand vous zoomez sur un détail.
 
-> ⚠️ **Version 0.1 en développement.** Le module n'a pas encore été testé en conditions réelles. Retours et rapports de bugs bienvenus dans les [issues](https://github.com/argannao/Vellum/issues).
+> ⚠️ **Module en développement.** Testé sur Foundry VTT v14. Retours et rapports de bugs bienvenus dans les [issues](https://github.com/argannao/Vellum/issues).
 
 ---
 
@@ -14,14 +14,24 @@ Foundry accepte déjà les fichiers `.svg` comme fond de scène ou comme tuile. 
 
 ## Ce que fait Vellum
 
-Vellum redessine vos SVG **à la résolution réellement affichée à l'écran** :
+Vellum affiche vos SVG en **deux couches** :
 
-- Quand vous zoomez, il attend que le mouvement s'arrête (environ 0,2 s), puis redessine le SVG à la nouvelle résolution.
-- Quand vous dézoomez, il réduit la taille de l'image en mémoire, et revient à l'image native de Foundry quand celle-ci suffit.
-- L'image reste dans le moteur de rendu de Foundry : **éclairage, brouillard de guerre, vision et murs fonctionnent normalement.**
-- Chaque joueur calcule son propre rendu selon son écran et ses réglages. Rien n'est synchronisé, rien n'est stocké dans le monde.
+1. **Le fond de base** : la carte entière, rendue une seule fois au chargement de la scène, en 4096 px par défaut. C'est elle que vous voyez en vue d'ensemble et pendant les déplacements.
+2. **La zone visible** : uniquement la portion à l'écran (plus une marge), redessinée à la résolution exacte de votre écran et posée par-dessus. Elle est mise à jour après un zoom, ou quand vous sortez de la marge.
+
+Résultat :
+
+- **Net à tous les zooms, quelle que soit la taille de la carte**, puisqu'on ne dessine jamais que ce qui est à l'écran.
+- **Fluide** : les rendus sont découpés en morceaux et étalés sur plusieurs images pour ne pas figer l'interface, et un petit déplacement ne déclenche aucun nouveau calcul.
+- **Fidèle** : le rendu est identique à celui du SVG d'origine, au pixel près.
+- **Intégré à Foundry** : éclairage, brouillard de guerre, vision et murs fonctionnent normalement, et les tuiles posées au-dessus restent au-dessus.
+- **Local** : chaque joueur calcule son propre rendu selon son écran et ses réglages. Rien n'est synchronisé, rien n'est stocké dans le monde.
 
 Fonds de scène et tuiles sont gérés de la même façon, sans configuration : il suffit d'utiliser un fichier `.svg`.
+
+### Optimisation automatique des flous
+
+Les filtres de flou (ombrages de relief, halos…) sont l'opération la plus coûteuse pour le navigateur : sur une carte de test, ils représentaient les trois quarts du temps de rendu. Comme un contenu flou n'a, par nature, aucun détail fin, Vellum pré-calcule chaque calque flouté une seule fois sous forme d'image, à sa place exacte dans la carte (ordre d'affichage, transformations et modes de fusion conservés). Visuellement, rien ne change.
 
 ## Installation
 
@@ -32,8 +42,6 @@ Dans Foundry : **Modules complémentaires → Installer un module**, puis collez
 ```
 https://github.com/argannao/Vellum/releases/latest/download/module.json
 ```
-
-> Disponible dès la publication de la première release.
 
 ### Manuellement
 
@@ -47,6 +55,8 @@ https://github.com/argannao/Vellum/releases/latest/download/module.json
 2. Choisissez un fichier `.svg` comme fond de scène (configuration de la scène) ou comme tuile.
 3. Zoomez : c'est net.
 
+Au premier affichage d'une carte, Vellum la prépare (lecture, optimisation des flous, fond de base) : comptez une à quelques secondes pour une grosse carte. La scène reste utilisable pendant ce temps, avec l'image native de Foundry.
+
 ### Réglages
 
 Dans **Paramètres → Configurer les paramètres → Vellum**. Ce sont des réglages **client** : chaque joueur règle Vellum selon sa machine.
@@ -54,9 +64,10 @@ Dans **Paramètres → Configurer les paramètres → Vellum**. Ce sont des rég
 | Réglage | Par défaut | Rôle |
 |---|---|---|
 | Activer le rendu vectoriel | Oui | Désactivé, Foundry affiche les SVG comme d'habitude. |
-| Qualité | Écran (×1) | Résolution de rendu par rapport à l'écran. ×1,5 ou ×2 pour un rendu encore plus fin, au prix de plus de mémoire. |
-| Budget mémoire par image | 64 Mpx | Taille maximale d'une image rendue (64 Mpx ≈ 256 Mo de mémoire vidéo). À baisser sur les petites configurations. |
-| Mode débogage | Non | Affiche le détail de chaque rendu dans la console. |
+| Qualité | Écran (×1) | Résolution de la zone visible par rapport à l'écran. ×1,5 ou ×2 pour un rendu encore plus fin, au prix de plus de mémoire et de temps de calcul. |
+| Résolution du fond de base | 4096 px | Taille de la carte entière rendue au chargement. Plus haut = vue d'ensemble plus nette, mais chargement plus long. |
+| Budget mémoire de la zone visible | 32 Mpx | Taille maximale du rendu de la zone affichée (32 Mpx ≈ 128 Mo de mémoire vidéo, assez pour un écran 4K). À baisser sur les petites configurations. |
+| Mode débogage | Non | Affiche le détail et la durée de chaque rendu dans la console. |
 
 ## Préparer ses SVG
 
@@ -65,13 +76,13 @@ Pour un résultat optimal :
 - **Convertissez les textes en tracés** (dans Inkscape : *Chemin → Objet en chemin*). Un SVG affiché comme image ne peut pas charger de polices externes.
 - **Intégrez les images** plutôt que de les lier. Les images bitmap contenues dans le SVG restent, elles, limitées à leur propre résolution.
 - **Donnez une taille au document** (`width`, `height` ou `viewBox`). C'est cette taille que Foundry utilise pour dimensionner la scène.
-- **Évitez les filtres lourds** (flous, ombres portées en grand nombre) : ils ralentissent chaque nouveau rendu.
+- **Les filtres de flou sont optimisés automatiquement** s'ils sont peu nombreux (ombrage global, halo…). Des centaines d'ombres floutées individuelles (une par arbre, par exemple) restent en vectoriel et ralentissent le rendu.
 
 ## Limites connues
 
-- **Plafond de résolution.** Sur une très grande carte très zoomée, la résolution est plafonnée par le budget mémoire et par la taille maximale de texture du GPU (souvent 16 384 px). Le rendu reste bien meilleur que l'image native, mais peut ne plus être parfaitement net au zoom maximal. La version 0.2 lèvera cette limite (voir feuille de route).
-- **Court délai au zoom.** Pendant le mouvement, c'est la version précédente qui est affichée, étirée ; la version nette apparaît dès l'arrêt.
-- **SVG très complexes.** Le rendu se fait dans le navigateur et peut prendre quelques centaines de millisecondes pour des fichiers très chargés.
+- **Court délai au zoom.** Pendant le mouvement, c'est la version précédente qui est affichée, agrandie ; la version nette apparaît dès l'arrêt (environ 0,15 s, plus le temps de calcul).
+- **SVG très complexes.** Le temps de rendu dépend surtout du contenu du fichier. Sur une carte de 16 Mo et 61 000 formes, comptez de l'ordre d'une à quelques centaines de millisecondes par mise à jour de la zone visible, étalées sur plusieurs images.
+- **Navigateur.** Vellum est optimisé pour Chromium (l'application Foundry, Chrome, Edge). Sous Firefox, le rendu fonctionne mais peut être plus lent.
 - **Fichiers hébergés ailleurs** (S3, autre domaine) : le serveur doit autoriser les requêtes CORS, sinon le SVG reste en résolution native.
 
 ## Diagnostic
@@ -82,31 +93,39 @@ Ouvrez la console (F12) et tapez :
 game.modules.get("vellum").api.inspect()
 ```
 
-Vous obtenez la liste des SVG détectés, leur taille native et la résolution actuellement rendue par Vellum. Autres commandes :
+Vous obtenez la liste des SVG détectés, avec pour chacun :
+
+- **natif** : la taille à laquelle Foundry l'avait figé ;
+- **base** : la taille du fond de base rendu par Vellum ;
+- **zone** : la taille du rendu de la zone visible et la portion de la carte qu'elle couvre (« — » quand le fond de base suffit).
+
+Autres commandes :
 
 ```js
-game.modules.get("vellum").api.refresh() // force un nouveau rendu
-game.modules.get("vellum").api.reset()   // revient aux images natives puis recalcule
+game.modules.get("vellum").api.refresh() // force une mise à jour
+game.modules.get("vellum").api.reset()   // revient aux images natives puis recalcule tout
 ```
 
-En cas de bug, joignez le résultat de `inspect()` et les messages d'erreur de la console à votre issue.
+Activez le **mode débogage** dans les réglages pour voir la durée de chaque étape. En cas de bug, joignez le résultat de `inspect()` et les messages de la console à votre issue.
 
 ## Feuille de route
 
 - [x] **0.1** — Rendu adaptatif au zoom des fonds de scène et tuiles SVG.
-- [ ] **0.2** — Rendu par zone visible : une version basse résolution de toute la carte, plus un rendu pleine résolution limité à la portion affichée. Net à tous les zooms, quelle que soit la taille de la carte.
-- [ ] **0.3** — Rendu en arrière-plan (sans bloquer l'interface) et cache partagé quand un même SVG est utilisé plusieurs fois.
+- [x] **0.2** — Rendu en deux couches (fond de base + zone visible), rendus découpés pour la fluidité, optimisation automatique des flous, fond de base partagé entre objets identiques.
+- [ ] **0.3** — Mémorisation des cartes préparées d'une session à l'autre, pour un chargement instantané.
 - [ ] Pistes : réglages par scène, aperçu dans la configuration de la scène, prise en charge d'autres formats vectoriels.
 
 ## Fonctionnement technique
 
-Le canvas de Foundry tourne en WebGL (via PIXI), qui ne sait afficher que des textures en pixels. Vellum parcourt le groupe primaire du canvas, repère les objets dont la texture provient d'un fichier SVG, puis :
+Le canvas de Foundry tourne en WebGL (via PIXI), qui ne sait afficher que des textures en pixels. Vellum :
 
-1. calcule la taille à laquelle l'objet est réellement affiché à l'écran (zoom × densité de pixels × qualité) ;
-2. si l'image actuelle est trop petite (ou inutilement grande), il récupère le code source du SVG, fixe sa taille à la résolution voulue et le fait dessiner par le navigateur dans un `<canvas>` ;
-3. remplace la texture de l'objet par ce nouveau rendu, sans changer sa taille dans la scène.
+1. parcourt le groupe primaire du canvas et repère les objets dont la texture provient d'un fichier SVG ;
+2. charge le SVG une seule fois, le normalise (taille et `viewBox`), pré-rend ses calques floutés, puis le décode en image. Chromium garde sa version vectorielle : dessiner une portion agrandie retrace les formes à la taille demandée ;
+3. rend la carte entière en fond de base et remplace la texture de Foundry par ce rendu, sans changer sa taille dans la scène ;
+4. à chaque arrêt de zoom ou de déplacement, calcule la zone visible et la résolution nécessaire, puis dessine cette zone dans un canvas, morceau par morceau ;
+5. pose ce rendu par-dessus le fond, dans un objet du même type que la cible, inséré juste au-dessus d'elle : il est trié, éclairé et masqué comme elle. Sa position est resynchronisée à chaque image.
 
-La texture d'origine chargée par Foundry n'est jamais modifiée : désactiver Vellum la rétablit immédiatement.
+Les canvas de rendu sont gardés en mémoire CPU, ce qui évite les artefacts que certaines cartes graphiques produisent lors de la copie de très grands canvas vers WebGL. La texture d'origine de Foundry n'est jamais modifiée : désactiver Vellum la rétablit immédiatement.
 
 ### Structure du dépôt
 
@@ -114,8 +133,9 @@ La texture d'origine chargée par Foundry n'est jamais modifiée : désactiver V
 module.json              Manifeste du module
 scripts/
   vellum.mjs             Point d'entrée : réglages, hooks, API
-  renderer.mjs           Détection des SVG et gestion des textures
-  svg-rasterizer.mjs     Chargement et rasterisation des SVG
+  renderer.mjs           Détection des SVG, fond de base et zone visible
+  svg-rasterizer.mjs     Chargement, décodage et dessin par morceaux
+  svg-optimizer.mjs      Pré-rendu des calques floutés
   constants.mjs          Seuils et paramètres internes
 lang/                    Traductions (français, anglais)
 .github/workflows/       Publication automatique des releases
@@ -124,7 +144,7 @@ lang/                    Traductions (français, anglais)
 ### Publier une nouvelle version
 
 1. Mettez à jour `CHANGELOG.md`.
-2. Sur GitHub, créez une release avec un tag au format `vX.Y.Z` (par exemple `v0.1.0`).
+2. Sur GitHub, créez une release avec un tag au format `vX.Y.Z` (par exemple `v0.2.0`), sans la marquer comme pre-release.
 3. Le workflow met à jour `module.json` avec la version et les bonnes URLs, puis joint `module.json` et `module.zip` à la release. Foundry détecte la mise à jour automatiquement.
 
 ## Compatibilité

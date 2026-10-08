@@ -2,7 +2,7 @@
  * Vellum — fonds de scène et tuiles SVG nets à tous les niveaux de zoom.
  * Point d'entrée du module : réglages, hooks et API publique.
  */
-import { MODULE_ID, QUALITY_FACTORS } from "./constants.mjs";
+import { MODULE_ID, QUALITY_FACTORS, BASE_RESOLUTIONS } from "./constants.mjs";
 import { VellumRenderer } from "./renderer.mjs";
 
 const renderer = new VellumRenderer();
@@ -37,14 +37,29 @@ function registerSettings() {
     onChange
   });
 
+  game.settings.register(MODULE_ID, "baseResolution", {
+    name: "VELLUM.Settings.BaseResolution.Name",
+    hint: "VELLUM.Settings.BaseResolution.Hint",
+    scope: "client",
+    config: true,
+    type: Number,
+    choices: Object.fromEntries(BASE_RESOLUTIONS.map(r => [r, `${r} px`])),
+    default: 4096,
+    onChange: () => {
+      // Le fond de base n'est rendu qu'une fois : il faut tout recalculer.
+      renderer.reset();
+      renderer.schedule(0);
+    }
+  });
+
   game.settings.register(MODULE_ID, "maxMegapixels", {
     name: "VELLUM.Settings.MaxMegapixels.Name",
     hint: "VELLUM.Settings.MaxMegapixels.Hint",
     scope: "client",
     config: true,
     type: Number,
-    range: { min: 16, max: 256, step: 16 },
-    default: 64,
+    range: { min: 8, max: 128, step: 8 },
+    default: 32,
     onChange
   });
 
