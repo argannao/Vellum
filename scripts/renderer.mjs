@@ -282,8 +282,10 @@ export class VellumRenderer {
   }
 
   #createTexture(canvasEl) {
+    // Pas de mipmaps : la texture est déjà rendue à la résolution de l'écran, et
+    // leur génération sur une texture géante est une source d'artefacts GPU.
     const options = {};
-    if (PIXI.MIPMAP_MODES) options.mipmap = PIXI.MIPMAP_MODES.ON;
+    if (PIXI.MIPMAP_MODES) options.mipmap = PIXI.MIPMAP_MODES.OFF;
     if (PIXI.SCALE_MODES) options.scaleMode = PIXI.SCALE_MODES.LINEAR;
     return PIXI.Texture.from(canvasEl, options);
   }

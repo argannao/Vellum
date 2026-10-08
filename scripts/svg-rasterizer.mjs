@@ -107,7 +107,10 @@ export async function rasterizeSvg(svgText, width, height, fallbackSize) {
     const canvas = document.createElement("canvas");
     canvas.width = width;
     canvas.height = height;
-    const ctx = canvas.getContext("2d");
+    // willReadFrequently force un canvas en mémoire CPU. Sans ça, Chrome dessine
+    // les très grands canvas sur le GPU, et la copie vers la texture WebGL peut
+    // produire des pixels parasites (points et traits colorés) sur certaines cartes.
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
     ctx.drawImage(img, 0, 0, width, height);
