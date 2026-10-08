@@ -17,12 +17,12 @@ Foundry accepte déjà les fichiers `.svg` comme fond de scène ou comme tuile. 
 Vellum affiche vos SVG en **deux couches** :
 
 1. **Le fond de base** : la carte entière, rendue une seule fois au chargement de la scène, en 4096 px par défaut. C'est elle que vous voyez en vue d'ensemble et pendant les déplacements.
-2. **La zone visible** : uniquement la portion à l'écran (plus une marge), redessinée à la résolution exacte de votre écran et posée par-dessus. Elle est mise à jour après un zoom, ou quand vous sortez de la marge.
+2. **La zone visible** : la portion à l'écran, assemblée à partir de **tuiles** de 512 px rendues à la résolution de votre écran et posées par-dessus. Comme sur une carte en ligne, les tuiles sont gardées en mémoire : en vous déplaçant, seules les nouvelles tuiles en bordure sont calculées, et revenir sur une zone déjà vue est instantané.
 
 Résultat :
 
 - **Net à tous les zooms, quelle que soit la taille de la carte**, puisqu'on ne dessine jamais que ce qui est à l'écran.
-- **Fluide** : les rendus sont découpés en morceaux et étalés sur plusieurs images pour ne pas figer l'interface, et un petit déplacement ne déclenche aucun nouveau calcul.
+- **Fluide** : les tuiles manquantes sont dessinées une par une, en commençant par le centre de l'écran, et étalées sur plusieurs images pour ne pas figer l'interface. Les niveaux de zoom sont fixes (×2, ×4, ×8…) : zoomer à l'intérieur d'un même niveau ne déclenche aucun calcul.
 - **Fidèle** : le rendu est identique à celui du SVG d'origine, au pixel près.
 - **Intégré à Foundry** : éclairage, brouillard de guerre, vision et murs fonctionnent normalement, et les tuiles posées au-dessus restent au-dessus.
 - **Local** : chaque joueur calcule son propre rendu selon son écran et ses réglages. Rien n'est synchronisé, rien n'est stocké dans le monde.
@@ -66,7 +66,7 @@ Dans **Paramètres → Configurer les paramètres → Vellum**. Ce sont des rég
 | Activer le rendu vectoriel | Oui | Désactivé, Foundry affiche les SVG comme d'habitude. |
 | Qualité | Écran (×1) | Résolution de la zone visible par rapport à l'écran. ×1,5 ou ×2 pour un rendu encore plus fin, au prix de plus de mémoire et de temps de calcul. |
 | Résolution du fond de base | 4096 px | Taille de la carte entière rendue au chargement. Plus haut = vue d'ensemble plus nette, mais chargement plus long. |
-| Budget mémoire de la zone visible | 32 Mpx | Taille maximale du rendu de la zone affichée (32 Mpx ≈ 128 Mo de mémoire vidéo, assez pour un écran 4K). À baisser sur les petites configurations. |
+| Budget mémoire de la zone visible | 32 Mpx | Mémoire vidéo réservée aux tuiles en cache et à la zone affichée (32 Mpx ≈ 128 Mo). Plus haut, plus de tuiles restent en mémoire et les allers-retours sont instantanés. À baisser sur les petites configurations. |
 | Mode débogage | Non | Affiche le détail et la durée de chaque rendu dans la console. |
 
 ## Préparer ses SVG
@@ -80,8 +80,8 @@ Pour un résultat optimal :
 
 ## Limites connues
 
-- **Court délai au zoom.** Pendant le mouvement, c'est la version précédente qui est affichée, agrandie ; la version nette apparaît dès l'arrêt (environ 0,15 s, plus le temps de calcul).
-- **SVG très complexes.** Le temps de rendu dépend surtout du contenu du fichier. Sur une carte de 16 Mo et 61 000 formes, comptez de l'ordre d'une à quelques centaines de millisecondes par mise à jour de la zone visible, étalées sur plusieurs images.
+- **Affichage progressif.** Après un changement de niveau de zoom ou un grand déplacement, la zone affichée se précise tuile par tuile, du centre vers les bords ; en attendant, c'est la version précédente (ou le fond de base) qui est affichée.
+- **SVG très complexes.** Le temps de dessin d'une tuile dépend surtout du contenu du fichier : de l'ordre de 10 à 30 ms par tuile pour une carte de 16 Mo et 61 000 formes.
 - **Navigateur.** Vellum est optimisé pour Chromium (l'application Foundry, Chrome, Edge). Sous Firefox, le rendu fonctionne mais peut être plus lent.
 - **Fichiers hébergés ailleurs** (S3, autre domaine) : le serveur doit autoriser les requêtes CORS, sinon le SVG reste en résolution native.
 
@@ -97,7 +97,8 @@ Vous obtenez la liste des SVG détectés, avec pour chacun :
 
 - **natif** : la taille à laquelle Foundry l'avait figé ;
 - **base** : la taille du fond de base rendu par Vellum ;
-- **zone** : la taille du rendu de la zone visible et la portion de la carte qu'elle couvre (« — » quand le fond de base suffit).
+- **zone** : la taille de la zone assemblée, son niveau de zoom (×2, ×4…) et la portion de la carte qu'elle couvre (« — » quand le fond de base suffit) ;
+- **tuiles** : le nombre de tuiles en cache, et celles qui restent à dessiner.
 
 Autres commandes :
 
@@ -111,7 +112,8 @@ Activez le **mode débogage** dans les réglages pour voir la durée de chaque �
 ## Feuille de route
 
 - [x] **0.1** — Rendu adaptatif au zoom des fonds de scène et tuiles SVG.
-- [x] **0.2** — Rendu en deux couches (fond de base + zone visible), rendus découpés pour la fluidité, optimisation automatique des flous, fond de base partagé entre objets identiques.
+- [x] **0.2** — Rendu en deux couches (fond de base + zone visible), optimisation automatique des flous, fond de base partagé entre objets identiques.
+- [x] **0.2.1** — Zone visible rendue par tuiles avec cache GPU, pour supprimer les saccades.
 - [ ] **0.3** — Mémorisation des cartes préparées d'une session à l'autre, pour un chargement instantané.
 - [ ] Pistes : réglages par scène, aperçu dans la configuration de la scène, prise en charge d'autres formats vectoriels.
 
@@ -122,8 +124,9 @@ Le canvas de Foundry tourne en WebGL (via PIXI), qui ne sait afficher que des te
 1. parcourt le groupe primaire du canvas et repère les objets dont la texture provient d'un fichier SVG ;
 2. charge le SVG une seule fois, le normalise (taille et `viewBox`), pré-rend ses calques floutés, puis le décode en image. Chromium garde sa version vectorielle : dessiner une portion agrandie retrace les formes à la taille demandée ;
 3. rend la carte entière en fond de base et remplace la texture de Foundry par ce rendu, sans changer sa taille dans la scène ;
-4. à chaque arrêt de zoom ou de déplacement, calcule la zone visible et la résolution nécessaire, puis dessine cette zone dans un canvas, morceau par morceau ;
-5. pose ce rendu par-dessus le fond, dans un objet du même type que la cible, inséré juste au-dessus d'elle : il est trié, éclairé et masqué comme elle. Sa position est resynchronisée à chaque image.
+4. à chaque arrêt de zoom ou de déplacement, choisit le niveau de zoom (l'image entière fait la largeur du fond de base × 2, × 4, × 8…) et la liste des tuiles de 512 px qui couvrent l'écran, plus une tuile de marge ;
+5. assemble sur le GPU, dans une seule texture, l'ancienne vue (en aperçu) puis les tuiles déjà en cache, et dessine les tuiles manquantes une par une, du centre vers les bords. Chaque tuile est gardée sur le GPU ; les moins récemment utilisées sont libérées au-delà du budget mémoire ;
+6. pose cette texture par-dessus le fond, dans un objet du même type que la cible, inséré juste au-dessus d'elle : il est trié, éclairé et masqué comme elle. Sa position est resynchronisée à chaque image.
 
 Les canvas de rendu sont gardés en mémoire CPU, ce qui évite les artefacts que certaines cartes graphiques produisent lors de la copie de très grands canvas vers WebGL. La texture d'origine de Foundry n'est jamais modifiée : désactiver Vellum la rétablit immédiatement.
 
@@ -133,7 +136,7 @@ Les canvas de rendu sont gardés en mémoire CPU, ce qui évite les artefacts qu
 module.json              Manifeste du module
 scripts/
   vellum.mjs             Point d'entrée : réglages, hooks, API
-  renderer.mjs           Détection des SVG, fond de base et zone visible
+  renderer.mjs           Détection des SVG, fond de base, tuiles et zone visible
   svg-rasterizer.mjs     Chargement, décodage et dessin par morceaux
   svg-optimizer.mjs      Pré-rendu des calques floutés
   constants.mjs          Seuils et paramètres internes

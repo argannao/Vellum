@@ -26,9 +26,10 @@ export const VIEW_MARGIN_TILES = 1;
 
 /**
  * Tolérance (en puissance de 2) avant de passer au niveau de zoom supérieur :
- * 0,25 accepte un agrandissement jusqu'à ×1,19 avant de redessiner plus fin.
+ * 0,4 accepte un agrandissement jusqu'à ×1,32 avant de redessiner plus fin, et
+ * limite le surplus de résolution (et donc de calcul) à ×1,5 environ.
  */
-export const LEVEL_BIAS = 0.25;
+export const LEVEL_BIAS = 0.4;
 
 /** Temps maximum (ms) de dessin d'affilée avant de rendre la main au navigateur. */
 export const FRAME_BUDGET = 12;

@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.1
+
+### Améliorations
+- **Zone visible rendue par tuiles** de 512 px, comme sur une carte en ligne, pour supprimer les saccades au zoom et au déplacement :
+  - les tuiles sont gardées en cache sur la carte graphique : en se déplaçant, seules les nouvelles tuiles en bordure sont calculées, et revenir sur une zone déjà vue est instantané ;
+  - les tuiles manquantes sont dessinées une par une, du centre de l'écran vers les bords, sans bloquer l'interface ;
+  - niveaux de zoom fixes (×2, ×4, ×8…) : zoomer à l'intérieur d'un même niveau ne déclenche aucun calcul ;
+  - envois vers la carte graphique par petits morceaux (0,3 Mpx au lieu de plusieurs Mpx d'un coup).
+- Sur un parcours de test (déplacement, zoom ×8 → ×16, retour), environ 2 à 3 fois moins de temps de dessin et 4 fois moins de données envoyées au GPU qu'en 0.2.0.
+- `inspect()` affiche le niveau de zoom de la zone et l'état du cache de tuiles.
+
 ## 0.2.0
 
 ### Nouveautés
